@@ -1,0 +1,24 @@
+use DLC:graphics
+
+set number x to 50
+set number y to 50
+set number speed to 120
+set number frames to 0
+
+set func on_load() do:
+    window(640, 480, "demo")
+end
+
+set func on_update(dt) do:
+    change x to global
+    change x to x + speed * dt
+    change frames to global
+    change frames to frames + 1
+    if x > 600 do: change x to 0 end
+end
+
+set func on_draw() do:
+    clear(10, 10, 20)
+    rect(x, y, 40, 40, 200, 60, 60)
+    circle(300, 240, 30, 60, 200, 90)
+end

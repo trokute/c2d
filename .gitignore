@@ -1,0 +1,9 @@
+.env
+cuffc
+*.o
+*.exe
+.vscode/
+
+*.log
+.DS_Store
+Thumbs.db

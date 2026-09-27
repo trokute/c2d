@@ -1,0 +1,5 @@
+set constant str DEFAULT_GREETING to "Hello"
+
+set returnable func greet(name) do:
+    return DEFAULT_GREETING + ", " + name + "!"
+end

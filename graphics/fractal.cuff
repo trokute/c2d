@@ -1,0 +1,40 @@
+use DLC:graphics
+use DLC:math
+
+set number scale to 3
+set number cols to 106
+set number rows to 80
+set number max_iter to 30
+
+set list palette to [[10,10,40],[30,10,90],[60,10,150],[100,30,180],[150,60,200],[200,100,200],[230,150,150],[250,200,100],[255,240,80],[255,255,200]]
+
+set func on_load() do:
+    window(cols * scale, rows * scale, "fractal")
+end
+
+set func on_update(dt) do:
+end
+
+set func on_draw() do:
+    clear(0, 0, 0)
+    loop repeat py to 1 ~ rows do:
+        loop repeat px to 1 ~ cols do:
+            set number cx to (px / cols) * 3.5 - 2.5
+            set number cy to (py / rows) * 2.0 - 1.0
+            set number zx to 0
+            set number zy to 0
+            set number iter to 0
+            loop repeat n to 1 ~ max_iter do:
+                if zx * zx + zy * zy > 4 do: stop end
+                set number nzx to zx * zx - zy * zy + cx
+                set number nzy to 2 * zx * zy + cy
+                change zx to nzx
+                change zy to nzy
+                change iter to iter + 1
+            end
+            set number ci to mod(iter, 10) + 1
+            set list col to palette[ci]
+            rect((px - 1) * scale, (py - 1) * scale, scale, scale, col[1], col[2], col[3])
+        end
+    end
+end

@@ -1,0 +1,39 @@
+CXX = g++
+CXXFLAGS = -std=c++17 -Wall -Wextra -Werror -O3 -flto -DNDEBUG
+
+TARGET = cuffc
+SOURCES = main.cpp
+
+$(TARGET): $(SOURCES) $(wildcard engine/**/*.h engine/*.h)
+	$(CXX) $(CXXFLAGS) -o $(TARGET) $(SOURCES)
+
+clean:
+	rm -f $(TARGET)
+
+EMCC = em++
+WASM_ENTRY = wasm/bindings.cpp
+WASM_OUT_DIR = npm/dist
+WASM_OUT = $(WASM_OUT_DIR)/cuffscript.mjs
+
+EMFLAGS = -std=c++17 -O3 -flto -fexceptions --bind -DNDEBUG \
+	--no-entry \
+	-s MODULARIZE=1 \
+	-s EXPORT_ES6=1 \
+	-s EXPORT_NAME=createCuffScriptModule \
+	-s ENVIRONMENT=web,worker \
+	-s ALLOW_MEMORY_GROWTH=1 \
+	-s INITIAL_MEMORY=33554432 \
+	-s MAXIMUM_MEMORY=268435456 \
+	-s STACK_SIZE=16777216 \
+	-s FORCE_FILESYSTEM=1 \
+	-s EXPORTED_RUNTIME_METHODS="['FS']" \
+	-s NO_EXIT_RUNTIME=1
+
+wasm: $(WASM_ENTRY) $(wildcard engine/**/*.h engine/*.h)
+	mkdir -p $(WASM_OUT_DIR)
+	$(EMCC) $(EMFLAGS) $(WASM_ENTRY) -o $(WASM_OUT)
+
+wasm-clean:
+	rm -f $(WASM_OUT_DIR)/cuffscript.mjs $(WASM_OUT_DIR)/cuffscript.wasm
+
+.PHONY: clean wasm wasm-clean

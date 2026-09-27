@@ -1,0 +1,108 @@
+# Security Policy
+
+## Supported Versions
+
+CuffScript is currently in early development. Security patches are provided based on the latest version of the `main` branch.
+
+---
+
+## Reporting a Vulnerability
+
+If you discover a security vulnerability, please report it privately via GitHub's [Private Security Advisory](https://github.com/cuffscript/cuffscript/security/advisories/new) feature, or by opening a public issue.
+
+To help us process your report quickly, please include the following:
+
+- A minimal input or code snippet that reproduces the issue
+- A description of the symptoms and potential impact
+- Environment details such as OS and compiler version
+
+---
+
+## Response Process
+
+Once a report is received, we will review it and respond as soon as possible.
+After a patch is released, the details will be disclosed through Security Advisories, releases, or the changelog. If you wish, we will credit you as the reporter.
+
+---
+
+## Scope
+
+This policy applies to the engine code (`engine/`) and other core components of this repository.
+Logic issues in user-written CuffScript code and vulnerabilities in external build tools are outside the scope of this policy.
+
+---
+
+## Running untrusted scripts
+
+The engine is designed so that a script can fail but not crash the host: nesting, recursion,
+value depth, string/collection size and regex work are all bounded and reported as ordinary
+error codes, and `use ... from` cannot read outside the script's directory (or the `--root`
+you choose). No built-in performs file access. Two things are deliberately left
+to the embedder: an execution budget (`--max-steps`, `--timeout`, or `CuffEngine::Options`) is
+off by default, and process-level memory and CPU limits should still be applied when hosting
+untrusted code. Details and numbers are in `docs/IMPLEMENTATION_NOTES.md`, sections 22-23.
+
+## DLC:network
+
+As of v2.0.0, `use DLC:network` gives a script real outbound HTTP access (`get`/`post`, plain
+HTTP only — no TLS, so `https://` is rejected rather than silently downgraded). This is a
+meaningfully different trust boundary from everything else in the engine, worth calling out on
+its own:
+
+- **Off by default is not the default.** Unlike the module sandbox (safe by default, widened
+  explicitly), network access is _on_ by default, because that's what makes `use DLC:network`
+  useful out of the box for a script you run yourself. If you embed this engine to run scripts
+  you did not write — a web IDE, a multi-tenant service, anything processing untrusted
+  input — set `CuffEngine::Options::networkEnabled = false` (or run `cuffc --no-network`)
+  before you need it, not after.
+- **SSRF is blocked by default, not eliminated.** Every resolved address is checked against
+  loopback/private/link-local ranges (including the common cloud-metadata address,
+  `169.254.169.254`) right before connecting, so a script cannot reach `localhost`, your
+  internal network, or instance metadata through it. This check is deliberately on the
+  resolved IP, not the hostname text, but it is a single point-in-time check, not a general
+  DNS-rebinding defense. `allowPrivateNetworkTargets` / `--allow-private-network` turns it off
+  entirely — only do this for scripts you trust, or from a host that is itself isolated from
+  anything sensitive.
+- **No allowlist/denylist of hosts.** A script with network enabled can reach any public
+  address. If you need to restrict _which_ hosts a script may reach, that has to be enforced
+  outside the engine today (a filtering proxy, network namespace, or firewall in front of the
+  process) — it is not a configuration option here.
+- **Response size and time are capped** (`engine/common/Limits.h`:
+  `kHttpMaxResponseBytes`/`kHttpConnectTimeoutMs`/`kHttpTotalTimeoutMs`/`kHttpMaxRedirects`), so
+  a slow or oversized response can't hang or exhaust memory, but a script can still make many
+  requests in a loop — the execution budget above (`--max-steps`/`--timeout`) is what bounds
+  that, and it's off by default too.
+
+---
+
+# 보안 정책 (한국어)
+
+## 지원 버전
+
+현재 CuffScript는 초기 개발 단계입니다. 보안 패치는 `main` 브랜치 최신 버전을 기준으로 제공됩니다.
+
+---
+
+## 취약점 제보
+
+보안 취약점을 발견하셨다면 공개 이슈로 등록하거나 GitHub의 [Private Security Advisory](https://github.com/cuffscript/cuffscript/security/advisories/new) 기능을 통해 비공개로 제보해 주세요.
+
+제보 시 아래 내용을 포함해 주시면 빠른 처리에 도움이 됩니다.
+
+- 문제를 재현할 수 있는 최소한의 입력값 또는 코드
+- 발생하는 증상 및 예상되는 영향
+- OS, 컴파일러 버전 등 환경 정보
+
+---
+
+## 처리 절차
+
+제보가 접수되면 내용을 검토한 뒤 가능한 한 빠르게 응답드립니다.  
+패치가 완료되면 Security Advisory, 릴리즈, changelog 등을 통해 내용을 공개하며, 원하시는 경우 제보자를 명시합니다.
+
+---
+
+## 적용 범위
+
+이 정책은 본 저장소의 엔진 코드(`engine/`) 및 기타 주요 구성 파일들을 대상으로 합니다.  
+사용자가 직접 작성한 CuffScript 코드의 로직 문제나 외부 빌드 도구의 취약점은 적용 범위에 포함되지 않습니다.
