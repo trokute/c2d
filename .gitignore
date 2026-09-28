@@ -7,3 +7,7 @@ cuffc
 *.log
 .DS_Store
 Thumbs.db
+web/c2d.js
+web/c2d.wasm
+web/c2d.data
+node_modules/
