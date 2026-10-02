@@ -4,10 +4,10 @@
 #include <cstdint>
 
 #if defined(_WIN32)
-// Vista+ API; needs _WIN32_WINNT >= 0x0600 (set below if the includer hasn't
-// already asked for a newer one).
-#ifndef _WIN32_WINNT
-#define _WIN32_WINNT 0x0600
+// GetCurrentThreadStackLimits needs _WIN32_WINNT >= 0x0602.
+#if !defined(_WIN32_WINNT) || _WIN32_WINNT < 0x0602
+#undef _WIN32_WINNT
+#define _WIN32_WINNT 0x0602
 #endif
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -15,6 +15,7 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+#include <winsock2.h>
 #include <windows.h>
 // windef.h (pulled in by windows.h even with WIN32_LEAN_AND_MEAN) #defines
 // TRUE/FALSE/IN as plain macros, which silently mangles cuff::TokenType's
