@@ -35,6 +35,9 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: vcpkg install sdl2:x64-windows sdl2-image:x64-windows sdl2-mixer:x64-windows sdl2-ttf:x64-windows
+      - name: Set up MSVC
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
       - name: Test CuffScript
         if: runner.os == 'Linux'
         run: |
