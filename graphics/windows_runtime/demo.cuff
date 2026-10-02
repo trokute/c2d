@@ -1,24 +1,79 @@
 use DLC:graphics
+use DLC:string
 
-set number x to 50
-set number y to 50
-set number speed to 120
-set number frames to 0
+set number canvas_layer to 0
+set number font to 0
+set boolean editing to false
+set str draft to ""
+set number text_x to 0
+set number text_y to 0
+set list saved_text to []
+set list saved_x to []
+set list saved_y to []
 
 set func on_load() do:
-    window(640, 480, "demo")
+    window(800, 600, "c2d")
+    resolution(800, 600)
+    change canvas_layer to global
+    change canvas_layer to layer_create(800, 600)
+    layer_begin(canvas_layer)
+    clear(0, 0, 0)
+    layer_end()
+    change font to global
+    change font to font_load("/DejaVuSansMono.ttf", 18)
 end
 
 set func on_update(dt) do:
-    change x to global
-    change x to x + speed * dt
-    change frames to global
-    change frames to frames + 1
-    if x > 600 do: change x to 0 end
+    change editing to global
+    change draft to global
+    change text_x to global
+    change text_y to global
+
+    if editing do:
+        change draft to draft + text_input()
+        if key_pressed("BACKSPACE") do:
+            if length(draft) > 0 do:
+                change draft to draft[1~length(draft) - 1]
+            end
+        end
+        if key_pressed("RETURN") do:
+            if length(draft) > 0 do:
+                add draft to saved_text
+                add text_x to saved_x
+                add text_y to saved_y
+            end
+            change editing to false
+            text_input_stop()
+        end
+    else do:
+        if key_pressed("W") do:
+            change editing to true
+            change draft to ""
+            change text_x to mouse_x()
+            change text_y to mouse_y()
+            text_input_start()
+        end
+    end
 end
 
 set func on_draw() do:
-    clear(10, 10, 20)
-    rect(x, y, 40, 40, 200, 60, 60)
-    circle(300, 240, 30, 60, 200, 90)
+    clear(0, 0, 0)
+    if mouse_down(1) do:
+        layer_begin(canvas_layer)
+        circle(mouse_x(), mouse_y(), 3, 255, 255, 255)
+        layer_end()
+    end
+    layer_draw(canvas_layer, 0, 0)
+
+    if length(saved_text) > 0 do:
+        loop repeat i to 1 ~ length(saved_text) do:
+            text_draw(font, saved_text[i], saved_x[i], saved_y[i], 255, 255, 255, "left", 4)
+        end
+    end
+
+    if editing do:
+        if length(draft) > 0 do:
+            text_draw(font, draft, text_x, text_y, 255, 255, 255, "left", 4)
+        end
+    end
 end

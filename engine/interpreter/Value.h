@@ -130,7 +130,6 @@ namespace cuff
             v.storage_.emplace<6>(std::move(m));
             return v;
         }
-
         ValueType type() const { return static_cast<ValueType>(storage_.index()); }
 
         bool isEmpty() const { return storage_.index() == 0; }

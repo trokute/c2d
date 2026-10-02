@@ -10,6 +10,14 @@ try {
   const page = await browser.newPage();
   await page.goto("http://localhost:8001/index.html");
   await page.waitForTimeout(2000);
+  await page.mouse.move(300, 240);
+  await page.mouse.down();
+  await page.waitForTimeout(100);
+  await page.mouse.up();
+  await page.keyboard.press("w");
+  await page.keyboard.type("hello");
+  await page.keyboard.press("Enter");
+  await page.waitForTimeout(100);
   const err = await page.textContent("#out");
   const shot = (await page.locator("#canvas").screenshot()).toString("base64");
   const px = await page.evaluate(async (b64) => {
@@ -24,7 +32,7 @@ try {
     return Array.from(ctx.getImageData(300, 240, 1, 1).data);
   }, shot);
   await browser.close();
-  const ok = err === "" && px[0] === 60 && px[1] === 200 && px[2] === 90;
+  const ok = err === "" && px[0] === 255 && px[1] === 255 && px[2] === 255;
   code = ok ? 0 : 1;
   if (!ok) process.stderr.write("FAIL " + JSON.stringify({ err, px }) + "\n");
 } finally {

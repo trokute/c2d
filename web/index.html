@@ -10,7 +10,7 @@ pre { margin: 0; color: #f55; font: 12px monospace; }
 </style>
 </head>
 <body>
-<canvas id="canvas" tabindex="-1"></canvas>
+<canvas id="canvas" tabindex="0" autofocus></canvas>
 <pre id="out"></pre>
 <script>
 var Module = {
@@ -20,5 +20,10 @@ var Module = {
 };
 </script>
 <script src="c2d.js"></script>
+<script>
+document.getElementById("canvas").addEventListener("pointerdown", function () {
+  this.focus();
+});
+</script>
 </body>
 </html>

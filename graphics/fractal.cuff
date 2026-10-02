@@ -32,7 +32,7 @@ set func on_draw() do:
                 change zy to nzy
                 change iter to iter + 1
             end
-            set number ci to mod(iter, 10) + 1
+            set number ci to math_mod(iter, 10) + 1
             set list col to palette[ci]
             rect((px - 1) * scale, (py - 1) * scale, scale, scale, col[1], col[2], col[3])
         end

@@ -88,9 +88,13 @@ namespace cuff
                                   p.current().location);
             }
 
-            // Parse variable name
+            // Parse variable name. Accepts any word-shaped token, not just
+            // TokenType::IDENTIFIER — this is a fixed "a name goes here" slot
+            // (type keyword already consumed, 'to' required right after), so
+            // a name that happens to collide with a keyword (`set number add
+            // to 5`) is unambiguous and shouldn't be rejected.
             std::string name;
-            if (p.check(TokenType::IDENTIFIER))
+            if (isWordLikeToken(p.current()))
             {
                 name = p.current().value;
                 p.advance();
@@ -126,7 +130,7 @@ namespace cuff
             p.consume(TokenType::CHANGE, "expected 'change'");
 
             std::string name;
-            if (p.check(TokenType::IDENTIFIER))
+            if (isWordLikeToken(p.current()))
             {
                 name = p.current().value;
                 p.advance();

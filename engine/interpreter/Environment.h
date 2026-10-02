@@ -155,22 +155,36 @@ namespace cuff
         // Used for both reads and change-writes: walks block scopes up to
         // the nearest function-scope environment, then (if not found there
         // and not explicitly global-declared) falls back to true global.
+        //
+        // A real local binding at any level ALWAYS wins over `globalDeclared_`
+        // at the function-scope level — checked here in that order — so that
+        // a loop variable, parameter, or plain `set` local can shadow a
+        // `change name to global` bridge of the same name exactly the way a
+        // local shadows an implicit-fallback global everywhere else in the
+        // language. Checking `globalDeclared_` first (as an earlier version
+        // of this method did) let a bridge silently and permanently hide any
+        // same-named local declared anywhere in the same call — most visibly
+        // with a loop variable reusing a bridged name, where every read
+        // inside the loop body kept returning the stale global value instead
+        // of the loop's own counter.
         Lookup resolve(uint32_t nameId)
         {
             Environment *e = this;
             while (true)
             {
-                if (e->isFunctionScope_ && !e->globalDeclared_.empty() &&
-                    std::find(e->globalDeclared_.begin(), e->globalDeclared_.end(), nameId) != e->globalDeclared_.end())
-                {
-                    if (Value *v = e->global_->findLocal(nameId))
-                        return {v, e->global_};
-                    return {nullptr, nullptr};
-                }
                 if (Value *v = e->findLocal(nameId))
                     return {v, e};
                 if (e->isFunctionScope_)
+                {
+                    if (!e->globalDeclared_.empty() &&
+                        std::find(e->globalDeclared_.begin(), e->globalDeclared_.end(), nameId) != e->globalDeclared_.end())
+                    {
+                        if (Value *v = e->global_->findLocal(nameId))
+                            return {v, e->global_};
+                        return {nullptr, nullptr};
+                    }
                     break;
+                }
                 e = e->parent_;
             }
             // Implicit read fallback to true global (Python-like).
@@ -199,6 +213,7 @@ namespace cuff
         {
             return std::find(constants_.begin(), constants_.end(), nameId) != constants_.end();
         }
+
 
     private:
         Environment *parent_;

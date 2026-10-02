@@ -1,0 +1,99 @@
+name: Release
+
+'on':
+  push:
+    tags:
+      - '1.a'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux-x64
+          - os: macos-latest
+            platform: macos
+          - os: windows-latest
+            platform: windows-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++ pkg-config zip libsdl2-dev libsdl2-image-dev libsdl2-mixer-dev libsdl2-ttf-dev
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: brew install sdl2 sdl2_image sdl2_mixer sdl2_ttf pkg-config zip
+      - name: Install Windows dependencies
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: vcpkg install sdl2:x64-windows sdl2-image:x64-windows sdl2-mixer:x64-windows sdl2-ttf:x64-windows
+      - name: Test CuffScript
+        if: runner.os == 'Linux'
+        run: |
+          make
+          bash tests/run.sh
+      - name: Build Unix targets
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          set -euo pipefail
+          out="release/1.a/$PLATFORM"
+          mkdir -p "$out"
+          include_prefix=""
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            include_prefix="-I$(brew --prefix)/include"
+          fi
+          c++ -std=c++17 -O2 -DNDEBUG main.cpp -o "$out/cuffc"
+          c++ -std=c++17 -O2 -DNDEBUG -DCUFF_ENABLE_GRAPHICS $include_prefix $(pkg-config --cflags sdl2 SDL2_image SDL2_mixer SDL2_ttf) graphics/desktop_main.cpp -o "$out/c2d-graphics" $(pkg-config --libs sdl2 SDL2_image SDL2_mixer SDL2_ttf)
+          cp graphics/windows_runtime/demo.cuff assets/DejaVuSansMono.ttf "$out/"
+          cp README.md "$out/"
+          cd release/1.a
+          zip -r "c2d-1.a-$PLATFORM.zip" "$PLATFORM"
+      - name: Build Windows targets
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = 'release\1.a\windows-x64'
+          $prefix = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          cl /std:c++17 /EHsc /O2 /DNDEBUG main.cpp "/Fe:$out\cuffc.exe" /link ws2_32.lib
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cl /std:c++17 /EHsc /O2 /DNDEBUG /DCUFF_ENABLE_GRAPHICS "/I$prefix\include" graphics\desktop_main.cpp "/Fe:$out\c2d-graphics.exe" /link "/LIBPATH:$prefix\lib" SDL2main.lib SDL2.lib SDL2_image.lib SDL2_mixer.lib SDL2_ttf.lib ws2_32.lib
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item graphics\windows_runtime\demo.cuff, assets\DejaVuSansMono.ttf, README.md $out
+          Copy-Item "$prefix\bin\*.dll" $out
+          Compress-Archive -Path "$out\*" -DestinationPath 'release\1.a\c2d-1.a-windows-x64.zip' -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.platform }}
+          path: release/1.a/*.zip
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release/1.a
+          merge-multiple: true
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" release/1.a/*.zip --title '1.a (Cuff 3.1)' --notes '' --repo "$GITHUB_REPOSITORY"

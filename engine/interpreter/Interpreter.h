@@ -9,6 +9,7 @@
 #include "NativeFunctions.h"
 #include "../common/CuffError.h"
 #include "../common/SourceLocation.h"
+#include "../common/PathSandbox.h"
 #include "../parser/ASTNodes.h"
 #include "../parser/Parser.h"
 #include "../tokenizer/Tokenizer.h"
@@ -81,6 +82,7 @@ namespace cuff
             size_t stackBudgetBytes = 0; // native stack the evaluator may use; 0 = derive from the real stack size
             bool networkEnabled = true;  // 'use DLC:network' works at all; false suits multi-tenant/untrusted hosting
             bool allowPrivateNetworkTargets = false; // let DLC:network reach loopback/private/link-local addresses (see SECURITY.md)
+            bool filesystemEnabled = true; // 'use DLC:filesystem' works at all; false suits multi-tenant/untrusted hosting
         };
 
         Interpreter() { registerBuiltins(natives_); }
@@ -124,7 +126,7 @@ namespace cuff
         }
 
         Value callFunctionByName(const std::string &name, std::vector<Value> &args,
-                                  const SourceLocation &loc = SourceLocation())
+                                 const SourceLocation &loc = SourceLocation())
         {
             uint32_t id = internName(name);
             if (id >= userById_.size() || !userById_[id])
@@ -133,7 +135,7 @@ namespace cuff
         }
 
         Value callNative(const std::string &name, std::vector<Value> &args,
-                          const SourceLocation &loc = SourceLocation())
+                         const SourceLocation &loc = SourceLocation())
         {
             auto it = natives_.find(name);
             if (it == natives_.end())
@@ -415,7 +417,7 @@ namespace cuff
         {
             throw CuffRuntimeError(ErrorCode::UnsupportedOperation,
                                    "cannot return a value from a non-returnable function",
-                                   loc, "declare it with 'set returnable function' to allow returning a value");
+                                   loc, "declare it with 'set returnable func' to allow returning a value");
         }
 
         ExecOutcome execStatement(const Stmt &stmt, Environment &env)
@@ -704,9 +706,7 @@ namespace cuff
             }
             else
             {
-                // While and Match both re-check a boolean condition every
-                // iteration (see LoopParser.h for why the two share this
-                // implementation).
+                // LoopKind::While: re-check a boolean condition every iteration.
                 while (evalExpr(*loop.condition, env).truthy())
                 {
                     tick(loop.loc);
@@ -1028,6 +1028,16 @@ namespace cuff
                                          "check the spelling, or make sure it's declared before this point");
         }
 
+        // A plain "undefined function" is misleading when `name` actually IS
+        // defined, just not as anything callable (e.g. a number) — checked
+        // right before giving up in evalCall/invokeAwaited, once findUser()
+        // and findNative() have both already missed.
+        [[noreturn]] CUFF_COLD static void throwNotCallable(const std::string &name, const Value &v, const SourceLocation &loc)
+        {
+            throw UndefinedFunctionError("'" + name + "' is a " + valueTypeName(v.type()) + ", not a function",
+                                         loc, "did you mean to call a different name, or use '" + name + "' as a value instead?");
+        }
+
         [[noreturn]] CUFF_COLD static void throwDivisionByZero(const SourceLocation &loc)
         {
             throw DivisionByZeroError("division by zero", loc);
@@ -1309,7 +1319,7 @@ namespace cuff
         {
             throw CuffRuntimeError(ErrorCode::AwaitOnNonAsync,
                                    "'await' can only be used with an async function; '" + name + "' is not declared async", loc,
-                                   "declare it with 'set async function " + name + "(...) do:', or call it without 'await'");
+                                   "declare it with 'set async func " + name + "(...) do:', or call it without 'await'");
         }
 
         [[noreturn]] CUFF_COLD static void throwArgumentCount(const FunctionDecl &decl, size_t got, const SourceLocation &loc)
@@ -1333,6 +1343,28 @@ namespace cuff
             taskQueue_.push_back(QueuedTask{&decl, std::move(args)});
         }
 
+        // A pure function's body may call itself, another `pure` function, or
+        // any native/DLC function (natives never touch CuffScript's Environment
+        // at all, so they can't reach globals through this route) — but never
+        // a non-pure *user-defined* function. Without this, `pure` could be
+        // trivially defeated by wrapping the global access in an ordinary
+        // helper and calling that instead, which is exactly the sandbox-escape
+        // this check closes. Checked at the call site (not statically), so it
+        // also naturally covers a pure function that only reaches the impure
+        // call conditionally, deep in a branch.
+        [[noreturn]] CUFF_COLD static void throwPureImpureCall(const std::string &calleeName, const SourceLocation &loc)
+        {
+            throw CuffRuntimeError(ErrorCode::PureFunctionImpureCall,
+                                   "a pure function cannot call non-pure function '" + calleeName + "'", loc,
+                                   "mark '" + calleeName + "' as pure, or remove 'pure' from the caller");
+        }
+
+        void checkPureCallAllowed(bool calleeIsPure, const std::string &calleeName, const SourceLocation &loc)
+        {
+            if (currentFunctionPure_ && !calleeIsPure)
+                throwPureImpureCall(calleeName, loc);
+        }
+
         Value evalCall(const FunctionCall &fc, Environment &env)
         {
             std::vector<Value> args = takeArgsBuffer();
@@ -1352,6 +1384,7 @@ namespace cuff
             // lookup answers the async-deferral question.
             if (const FunctionDecl *user = findUser(fc.functionNameId))
             {
+                checkPureCallAllowed(user->isPure, fc.functionName, fc.loc);
                 if (user->isAsync)
                 {
                     // Called without await: doesn't run now — see the
@@ -1363,6 +1396,8 @@ namespace cuff
             }
             if (const NativeFn *native = findNative(fc))
                 return (*native)(args, fc.loc);
+            if (Environment::Lookup notFn = env.resolve(fc.functionNameId); notFn.value)
+                throwNotCallable(fc.functionName, *notFn.value, fc.loc);
             throwUndefinedFunction(fc.functionName, fc.loc);
         }
 
@@ -1374,6 +1409,8 @@ namespace cuff
             const FunctionDecl *user = findUser(call.functionNameId);
             if (user && !user->isAsync)
                 throwAwaitOnNonAsync(call.functionName, loc);
+            if (user)
+                checkPureCallAllowed(user->isPure, call.functionName, loc);
             std::vector<Value> args = takeArgsBuffer();
             struct ArgsReturner
             {
@@ -1389,6 +1426,8 @@ namespace cuff
                 return callUserFunction(*user, args, loc);
             if (const NativeFn *native = findNative(call))
                 return (*native)(args, loc);
+            if (Environment::Lookup notFn = env.resolve(call.functionNameId); notFn.value)
+                throwNotCallable(call.functionName, *notFn.value, loc);
             throwUndefinedFunction(call.functionName, loc);
         }
 
@@ -1533,7 +1572,10 @@ namespace cuff
                 NetworkDLCOptions netOpts;
                 netOpts.enabled = config_.networkEnabled;
                 netOpts.allowPrivateTargets = config_.allowPrivateNetworkTargets;
-                registerDLC(use.name, natives_, use.loc, netOpts);
+                FilesystemDLCOptions fsOpts;
+                fsOpts.enabled = config_.filesystemEnabled;
+                fsOpts.root = moduleRoot_;
+                registerDLC(use.name, natives_, use.loc, netOpts, fsOpts);
                 return;
             }
             loadCustomModule(use.name, use.path, use.loc, env);
@@ -1548,19 +1590,9 @@ namespace cuff
             moduleRoot_ = ec ? root.lexically_normal() : canon;
         }
 
-        static bool isInsideRoot(const std::filesystem::path &path, const std::filesystem::path &root)
-        {
-            auto r = root.begin();
-            auto p = path.begin();
-            for (; r != root.end(); ++r, ++p)
-            {
-                if (r->empty())
-                    break;
-                if (p == path.end() || *r != *p)
-                    return false;
-            }
-            return true;
-        }
+        // isInsideRoot() itself now lives in ../common/PathSandbox.h, shared
+        // with DLC:filesystem (see NativeFunctions.h), which needs the exact
+        // same containment check for its own root-confined path resolution.
 
         struct ImportMark
         {

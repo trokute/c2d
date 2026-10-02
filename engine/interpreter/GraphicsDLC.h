@@ -4,12 +4,27 @@
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_image.h>
 #include <SDL2/SDL_mixer.h>
+#include <SDL2/SDL_ttf.h>
 #include <unordered_map>
 #include <string>
 #include <cmath>
+#include <vector>
+#include <unordered_set>
 
 namespace cuff
 {
+
+    struct GfxQuad
+    {
+        SDL_Rect rect;
+    };
+
+    struct GfxTransform
+    {
+        double x = 0;
+        double y = 0;
+        double zoom = 1;
+    };
 
     class GraphicsState
     {
@@ -28,11 +43,22 @@ namespace cuff
         double dt = 0.0;
         std::unordered_map<int, SDL_Texture *> images;
         int nextImageId = 1;
+        std::unordered_map<int, TTF_Font *> fonts;
+        int nextFontId = 1;
+        std::unordered_map<int, GfxQuad> quads;
+        int nextQuadId = 1;
+        std::unordered_map<int, SDL_Texture *> layers;
+        int nextLayerId = 1;
+        SDL_Texture *layerTarget = nullptr;
+        GfxTransform transform;
         std::unordered_map<int, Mix_Chunk *> sounds;
         int nextSoundId = 1;
         Mix_Music *music = nullptr;
         const Uint8 *keys = nullptr;
         int keyCount = 0;
+        std::unordered_set<SDL_Scancode> pressedKeys;
+        std::string textInput;
+        bool textInputActive = false;
         int mouseX = 0;
         int mouseY = 0;
         Uint32 mouseButtons = 0;
@@ -42,6 +68,12 @@ namespace cuff
             for (auto &p : images)
                 SDL_DestroyTexture(p.second);
             images.clear();
+            for (auto &p : fonts)
+                TTF_CloseFont(p.second);
+            fonts.clear();
+            for (auto &p : layers)
+                SDL_DestroyTexture(p.second);
+            layers.clear();
             for (auto &p : sounds)
                 Mix_FreeChunk(p.second);
             sounds.clear();
@@ -50,6 +82,8 @@ namespace cuff
                 Mix_FreeMusic(music);
                 music = nullptr;
             }
+            if (TTF_WasInit())
+                TTF_Quit();
             if (renderer)
             {
                 SDL_DestroyRenderer(renderer);
@@ -71,6 +105,91 @@ namespace cuff
 
         ~GraphicsState() { shutdown(); }
     };
+
+    inline int gfxX(double x)
+    {
+        auto &g = GraphicsState::instance();
+        return static_cast<int>((x - g.transform.x) * g.transform.zoom);
+    }
+
+    inline int gfxY(double y)
+    {
+        auto &g = GraphicsState::instance();
+        return static_cast<int>((y - g.transform.y) * g.transform.zoom);
+    }
+
+    inline int gfxSize(double value)
+    {
+        return static_cast<int>(value * GraphicsState::instance().transform.zoom);
+    }
+
+    inline SDL_Rect gfxRect(double x, double y, double w, double h)
+    {
+        return SDL_Rect{gfxX(x), gfxY(y), gfxSize(w), gfxSize(h)};
+    }
+
+    inline SDL_Texture *gfxImage(const char *fn, int id, const SourceLocation &loc)
+    {
+        auto &images = GraphicsState::instance().images;
+        auto it = images.find(id);
+        if (it == images.end())
+            throw ModuleError(ErrorCode::UnknownDLC, std::string(fn) + "() unknown image id", loc, "");
+        return it->second;
+    }
+
+    inline TTF_Font *gfxFont(const char *fn, int id, const SourceLocation &loc)
+    {
+        auto &fonts = GraphicsState::instance().fonts;
+        auto it = fonts.find(id);
+        if (it == fonts.end())
+            throw ModuleError(ErrorCode::UnknownDLC, std::string(fn) + "() unknown font id", loc, "");
+        return it->second;
+    }
+
+    inline std::string gfxTabs(const std::string &text, int tabSize)
+    {
+        std::string result;
+        int column = 0;
+        for (char ch : text)
+        {
+            if (ch == '\n')
+            {
+                result.push_back(ch);
+                column = 0;
+            }
+            else if (ch == '\t')
+            {
+                int count = tabSize - (column % tabSize);
+                result.append(static_cast<size_t>(count), ' ');
+                column += count;
+            }
+            else
+            {
+                result.push_back(ch);
+                ++column;
+            }
+        }
+        return result;
+    }
+
+    inline int gfxTextWidth(TTF_Font *font, const std::string &text)
+    {
+        int width = 0;
+        size_t start = 0;
+        while (start <= text.size())
+        {
+            size_t end = text.find('\n', start);
+            std::string line = text.substr(start, end == std::string::npos ? std::string::npos : end - start);
+            int lineWidth = 0;
+            int lineHeight = 0;
+            TTF_SizeUTF8(font, line.c_str(), &lineWidth, &lineHeight);
+            width = std::max(width, lineWidth);
+            if (end == std::string::npos)
+                break;
+            start = end + 1;
+        }
+        return width;
+    }
 
     inline void gfxRequireWindow(const char *fn, const SourceLocation &loc)
     {
@@ -94,6 +213,7 @@ namespace cuff
                 SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
                 IMG_Init(IMG_INIT_PNG | IMG_INIT_JPG);
                 Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 1024);
+                TTF_Init();
                 g.running = true;
             }
             g.window = SDL_CreateWindow(title.c_str(), SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
@@ -117,10 +237,16 @@ namespace cuff
             gfxRequireWindow("poll", loc);
 
             SDL_Event e;
+            g.pressedKeys.clear();
+            g.textInput.clear();
             while (SDL_PollEvent(&e))
             {
                 if (e.type == SDL_QUIT)
                     g.closeRequested = true;
+                else if (e.type == SDL_KEYDOWN && !e.key.repeat)
+                    g.pressedKeys.insert(e.key.keysym.scancode);
+                else if (e.type == SDL_TEXTINPUT && g.textInputActive)
+                    g.textInput += e.text.text;
             }
             g.mouseButtons = SDL_GetMouseState(&g.mouseX, &g.mouseY);
 
@@ -134,6 +260,132 @@ namespace cuff
         {
             expectArgCount("dt", args, 0, loc);
             return Value::makeNumber(GraphicsState::instance().dt);
+        };
+
+        reg["resolution"] = [](std::vector<Value> &args, const SourceLocation &loc) -> Value
+        {
+            expectArgCount("resolution", args, 2, loc);
+            gfxRequireWindow("resolution", loc);
+            int w = static_cast<int>(expectNumber("resolution", args, 0, loc));
+            int h = static_cast<int>(expectNumber("resolution", args, 1, loc));
+            SDL_RenderSetLogicalSize(GraphicsState::instance().renderer, w, h);
+            return Value::makeEmpty();
+        };
+
+        reg["camera"] = [](std::vector<Value> &args, const SourceLocation &loc) -> Value
+        {
+            expectArgCount("camera", args, 3, loc);
+            auto &t = GraphicsState::instance().transform;
+            t.x = expectNumber("camera", args, 0, loc);
+            t.y = expectNumber("camera", args, 1, loc);
+            t.zoom = expectNumber("camera", args, 2, loc);
+            if (t.zoom <= 0)
+                throw ValueError("camera() zoom must be positive", loc);
+            return Value::makeEmpty();
+        };
+
+        reg["camera_reset"] = [](std::vector<Value> &args, const SourceLocation &loc) -> Value
+        {
+            expectArgCount("camera_reset", args, 0, loc);
+            GraphicsState::instance().transform = GfxTransform();
+            return Value::makeEmpty();
+        };
+
+        reg["key_pressed"] = [](std::vector<Value> &args, const SourceLocation &loc) -> Value
+        {
+            expectArgCount("key_pressed", args, 1, loc);
+            const std::string &name = expectStr("key_pressed", args, 0, loc);
+            SDL_Scancode code = SDL_GetScancodeFromName(name.c_str());
+            if (code == SDL_SCANCODE_UNKNOWN)
+                return Value::makeBool(false);
+            return Value::makeBool(GraphicsState::instance().pressedKeys.count(code) != 0);
+        };
+
+        reg["text_input_start"] = [](std::vector<Value> &args, const SourceLocation &loc) -> Value
+        {
+            expectArgCount("text_input_start", args, 0, loc);
+            gfxRequireWindow("text_input_start", loc);
+            auto &g = GraphicsState::instance();
+            g.textInputActive = true;
+            g.textInput.clear();
+            SDL_StartTextInput();
+            return Value::makeEmpty();
+        };
+
+        reg["text_input_stop"] = [](std::vector<Value> &args, const SourceLocation &loc) -> Value
+        {
+            expectArgCount("text_input_stop", args, 0, loc);
+            auto &g = GraphicsState::instance();
+            g.textInputActive = false;
+            g.textInput.clear();
+            SDL_StopTextInput();
+            return Value::makeEmpty();
+        };
+
+        reg["text_input"] = [](std::vector<Value> &args, const SourceLocation &loc) -> Value
+        {
+            expectArgCount("text_input", args, 0, loc);
+            auto &g = GraphicsState::instance();
+            std::string input = g.textInput;
+            g.textInput.clear();
+            return Value::makeStr(input);
+        };
+
+        reg["layer_create"] = [](std::vector<Value> &args, const SourceLocation &loc) -> Value
+        {
+            expectArgCount("layer_create", args, 2, loc);
+            gfxRequireWindow("layer_create", loc);
+            int w = static_cast<int>(expectNumber("layer_create", args, 0, loc));
+            int h = static_cast<int>(expectNumber("layer_create", args, 1, loc));
+            auto &g = GraphicsState::instance();
+            SDL_Texture *texture = SDL_CreateTexture(g.renderer, SDL_PIXELFORMAT_RGBA8888, SDL_TEXTUREACCESS_TARGET, w, h);
+            if (!texture)
+                throw ModuleError(ErrorCode::UnknownDLC, "layer_create() could not create layer", loc, SDL_GetError());
+            int id = g.nextLayerId++;
+            g.layers[id] = texture;
+            return Value::makeNumber(id);
+        };
+
+        reg["layer_begin"] = [](std::vector<Value> &args, const SourceLocation &loc) -> Value
+        {
+            expectArgCount("layer_begin", args, 1, loc);
+            gfxRequireWindow("layer_begin", loc);
+            int id = static_cast<int>(expectNumber("layer_begin", args, 0, loc));
+            auto &g = GraphicsState::instance();
+            auto it = g.layers.find(id);
+            if (it == g.layers.end())
+                throw ModuleError(ErrorCode::UnknownDLC, "layer_begin() unknown layer id", loc, "");
+            g.layerTarget = it->second;
+            SDL_SetRenderTarget(g.renderer, g.layerTarget);
+            return Value::makeEmpty();
+        };
+
+        reg["layer_end"] = [](std::vector<Value> &args, const SourceLocation &loc) -> Value
+        {
+            expectArgCount("layer_end", args, 0, loc);
+            gfxRequireWindow("layer_end", loc);
+            auto &g = GraphicsState::instance();
+            g.layerTarget = nullptr;
+            SDL_SetRenderTarget(g.renderer, nullptr);
+            return Value::makeEmpty();
+        };
+
+        reg["layer_draw"] = [](std::vector<Value> &args, const SourceLocation &loc) -> Value
+        {
+            expectArgCount("layer_draw", args, 3, loc);
+            gfxRequireWindow("layer_draw", loc);
+            int id = static_cast<int>(expectNumber("layer_draw", args, 0, loc));
+            double x = expectNumber("layer_draw", args, 1, loc);
+            double y = expectNumber("layer_draw", args, 2, loc);
+            auto &g = GraphicsState::instance();
+            auto it = g.layers.find(id);
+            if (it == g.layers.end())
+                throw ModuleError(ErrorCode::UnknownDLC, "layer_draw() unknown layer id", loc, "");
+            int w = 0, h = 0;
+            SDL_QueryTexture(it->second, nullptr, nullptr, &w, &h);
+            SDL_Rect dst = gfxRect(x, y, w, h);
+            SDL_RenderCopy(g.renderer, it->second, nullptr, &dst);
+            return Value::makeEmpty();
         };
 
         reg["clear"] = [](std::vector<Value> &args, const SourceLocation &loc) -> Value
@@ -161,11 +413,11 @@ namespace cuff
         {
             expectArgCount("rect", args, 7, loc);
             gfxRequireWindow("rect", loc);
-            SDL_Rect rc;
-            rc.x = static_cast<int>(expectNumber("rect", args, 0, loc));
-            rc.y = static_cast<int>(expectNumber("rect", args, 1, loc));
-            rc.w = static_cast<int>(expectNumber("rect", args, 2, loc));
-            rc.h = static_cast<int>(expectNumber("rect", args, 3, loc));
+            double x = expectNumber("rect", args, 0, loc);
+            double y = expectNumber("rect", args, 1, loc);
+            double w = expectNumber("rect", args, 2, loc);
+            double h = expectNumber("rect", args, 3, loc);
+            SDL_Rect rc = gfxRect(x, y, w, h);
             int r = static_cast<int>(expectNumber("rect", args, 4, loc));
             int g_ = static_cast<int>(expectNumber("rect", args, 5, loc));
             int b = static_cast<int>(expectNumber("rect", args, 6, loc));
@@ -188,7 +440,7 @@ namespace cuff
             int b = static_cast<int>(expectNumber("line", args, 6, loc));
             auto &g = GraphicsState::instance();
             SDL_SetRenderDrawColor(g.renderer, r, g_, b, 255);
-            SDL_RenderDrawLine(g.renderer, x1, y1, x2, y2);
+            SDL_RenderDrawLine(g.renderer, gfxX(x1), gfxY(y1), gfxX(x2), gfxY(y2));
             return Value::makeEmpty();
         };
 
@@ -207,7 +459,7 @@ namespace cuff
             for (int y = -radius; y <= radius; ++y)
             {
                 int span = static_cast<int>(std::sqrt(static_cast<double>(radius * radius - y * y)));
-                SDL_RenderDrawLine(g.renderer, cx - span, cy + y, cx + span, cy + y);
+                SDL_RenderDrawLine(g.renderer, gfxX(cx - span), gfxY(cy + y), gfxX(cx + span), gfxY(cy + y));
             }
             return Value::makeEmpty();
         };
@@ -239,7 +491,7 @@ namespace cuff
                 throw ModuleError(ErrorCode::UnknownDLC, "image_draw() unknown image id", loc, "");
             int w = 0, h = 0;
             SDL_QueryTexture(it->second, nullptr, nullptr, &w, &h);
-            SDL_Rect dst{x, y, w, h};
+            SDL_Rect dst = gfxRect(x, y, w, h);
             SDL_RenderCopy(g.renderer, it->second, nullptr, &dst);
             return Value::makeEmpty();
         };
@@ -285,7 +537,7 @@ namespace cuff
                 throw ModuleError(ErrorCode::UnknownDLC, "image_draw_ex() unknown image id", loc, "");
             int w = 0, h = 0;
             SDL_QueryTexture(it->second, nullptr, nullptr, &w, &h);
-            SDL_Rect dst{x, y, static_cast<int>(w * scale), static_cast<int>(h * scale)};
+            SDL_Rect dst = gfxRect(x, y, w * scale, h * scale);
             SDL_RenderCopyEx(g.renderer, it->second, nullptr, &dst, rotation, nullptr, SDL_FLIP_NONE);
             return Value::makeEmpty();
         };
@@ -308,8 +560,136 @@ namespace cuff
             auto it = g.images.find(id);
             if (it == g.images.end())
                 throw ModuleError(ErrorCode::UnknownDLC, "sprite_draw() unknown image id", loc, "");
-            SDL_Rect dst{x, y, static_cast<int>(src.w * scale), static_cast<int>(src.h * scale)};
+            SDL_Rect dst = gfxRect(x, y, src.w * scale, src.h * scale);
             SDL_RenderCopyEx(g.renderer, it->second, &src, &dst, rotation, nullptr, SDL_FLIP_NONE);
+            return Value::makeEmpty();
+        };
+
+        reg["quad_create"] = [](std::vector<Value> &args, const SourceLocation &loc) -> Value
+        {
+            expectArgCount("quad_create", args, 4, loc);
+            GfxQuad quad;
+            quad.rect.x = static_cast<int>(expectNumber("quad_create", args, 0, loc));
+            quad.rect.y = static_cast<int>(expectNumber("quad_create", args, 1, loc));
+            quad.rect.w = static_cast<int>(expectNumber("quad_create", args, 2, loc));
+            quad.rect.h = static_cast<int>(expectNumber("quad_create", args, 3, loc));
+            auto &g = GraphicsState::instance();
+            int id = g.nextQuadId++;
+            g.quads[id] = quad;
+            return Value::makeNumber(id);
+        };
+
+        reg["quad_draw"] = [](std::vector<Value> &args, const SourceLocation &loc) -> Value
+        {
+            expectArgCount("quad_draw", args, 6, loc);
+            gfxRequireWindow("quad_draw", loc);
+            int imageId = static_cast<int>(expectNumber("quad_draw", args, 0, loc));
+            int quadId = static_cast<int>(expectNumber("quad_draw", args, 1, loc));
+            double x = expectNumber("quad_draw", args, 2, loc);
+            double y = expectNumber("quad_draw", args, 3, loc);
+            double scale = expectNumber("quad_draw", args, 4, loc);
+            double rotation = expectNumber("quad_draw", args, 5, loc);
+            auto &g = GraphicsState::instance();
+            SDL_Texture *texture = gfxImage("quad_draw", imageId, loc);
+            auto quad = g.quads.find(quadId);
+            if (quad == g.quads.end())
+                throw ModuleError(ErrorCode::UnknownDLC, "quad_draw() unknown quad id", loc, "");
+            SDL_Rect dst = gfxRect(x, y, quad->second.rect.w * scale, quad->second.rect.h * scale);
+            SDL_RenderCopyEx(g.renderer, texture, &quad->second.rect, &dst, rotation, nullptr, SDL_FLIP_NONE);
+            return Value::makeEmpty();
+        };
+
+        reg["image_tint"] = [](std::vector<Value> &args, const SourceLocation &loc) -> Value
+        {
+            expectArgCount("image_tint", args, 5, loc);
+            SDL_Texture *texture = gfxImage("image_tint", static_cast<int>(expectNumber("image_tint", args, 0, loc)), loc);
+            Uint8 r = static_cast<Uint8>(expectNumber("image_tint", args, 1, loc));
+            Uint8 g = static_cast<Uint8>(expectNumber("image_tint", args, 2, loc));
+            Uint8 b = static_cast<Uint8>(expectNumber("image_tint", args, 3, loc));
+            Uint8 a = static_cast<Uint8>(expectNumber("image_tint", args, 4, loc));
+            SDL_SetTextureColorMod(texture, r, g, b);
+            SDL_SetTextureAlphaMod(texture, a);
+            return Value::makeEmpty();
+        };
+
+        reg["font_load"] = [](std::vector<Value> &args, const SourceLocation &loc) -> Value
+        {
+            expectArgCount("font_load", args, 2, loc);
+            gfxRequireWindow("font_load", loc);
+            const std::string &path = expectStr("font_load", args, 0, loc);
+            int size = static_cast<int>(expectNumber("font_load", args, 1, loc));
+            TTF_Font *font = TTF_OpenFont(path.c_str(), size);
+            if (!font)
+                throw ModuleError(ErrorCode::UnknownDLC, "font_load() could not load '" + path + "'", loc, TTF_GetError());
+            auto &g = GraphicsState::instance();
+            int id = g.nextFontId++;
+            g.fonts[id] = font;
+            return Value::makeNumber(id);
+        };
+
+        reg["font_height"] = [](std::vector<Value> &args, const SourceLocation &loc) -> Value
+        {
+            expectArgCount("font_height", args, 1, loc);
+            return Value::makeNumber(TTF_FontHeight(gfxFont("font_height", static_cast<int>(expectNumber("font_height", args, 0, loc)), loc)));
+        };
+
+        reg["text_width"] = [](std::vector<Value> &args, const SourceLocation &loc) -> Value
+        {
+            expectArgCount("text_width", args, 3, loc);
+            TTF_Font *font = gfxFont("text_width", static_cast<int>(expectNumber("text_width", args, 0, loc)), loc);
+            const std::string &text = expectStr("text_width", args, 1, loc);
+            int tabSize = static_cast<int>(expectNumber("text_width", args, 2, loc));
+            return Value::makeNumber(gfxTextWidth(font, gfxTabs(text, tabSize)));
+        };
+
+        reg["text_draw"] = [](std::vector<Value> &args, const SourceLocation &loc) -> Value
+        {
+            expectArgCount("text_draw", args, 9, loc);
+            gfxRequireWindow("text_draw", loc);
+            int fontId = static_cast<int>(expectNumber("text_draw", args, 0, loc));
+            const std::string &source = expectStr("text_draw", args, 1, loc);
+            double x = expectNumber("text_draw", args, 2, loc);
+            double y = expectNumber("text_draw", args, 3, loc);
+            Uint8 r = static_cast<Uint8>(expectNumber("text_draw", args, 4, loc));
+            Uint8 g = static_cast<Uint8>(expectNumber("text_draw", args, 5, loc));
+            Uint8 b = static_cast<Uint8>(expectNumber("text_draw", args, 6, loc));
+            const std::string &align = expectStr("text_draw", args, 7, loc);
+            int tabSize = static_cast<int>(expectNumber("text_draw", args, 8, loc));
+            TTF_Font *font = gfxFont("text_draw", fontId, loc);
+            std::string text = gfxTabs(source, tabSize);
+            SDL_Color color{r, g, b, 255};
+            size_t start = 0;
+            int lineHeight = TTF_FontHeight(font);
+            int line = 0;
+            while (start <= text.size())
+            {
+                size_t end = text.find('\n', start);
+                std::string value = text.substr(start, end == std::string::npos ? std::string::npos : end - start);
+                SDL_Surface *surface = TTF_RenderUTF8_Blended(font, value.c_str(), color);
+                if (!surface)
+                    throw ModuleError(ErrorCode::UnknownDLC, "text_draw() could not render text", loc, TTF_GetError());
+                SDL_Texture *texture = SDL_CreateTextureFromSurface(GraphicsState::instance().renderer, surface);
+                int width = surface->w;
+                int height = surface->h;
+                SDL_FreeSurface(surface);
+                if (!texture)
+                    throw ModuleError(ErrorCode::UnknownDLC, "text_draw() could not create text texture", loc, SDL_GetError());
+                double drawX = x;
+                if (align == "right")
+                    drawX -= width;
+                else if (align != "left")
+                {
+                    SDL_DestroyTexture(texture);
+                    throw ValueError("text_draw() alignment must be left or right", loc);
+                }
+                SDL_Rect dst = gfxRect(drawX, y + line * lineHeight, width, height);
+                SDL_RenderCopy(GraphicsState::instance().renderer, texture, nullptr, &dst);
+                SDL_DestroyTexture(texture);
+                if (end == std::string::npos)
+                    break;
+                start = end + 1;
+                ++line;
+            }
             return Value::makeEmpty();
         };
 
