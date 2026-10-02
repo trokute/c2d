@@ -210,6 +210,7 @@ namespace cuff
             auto &g = GraphicsState::instance();
             if (!g.running)
             {
+                SDL_SetMainReady();
                 SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS);
                 IMG_Init(IMG_INIT_PNG | IMG_INIT_JPG);
                 Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 1024);

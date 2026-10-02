@@ -72,7 +72,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path $out | Out-Null
           cl /std:c++17 /EHsc /O2 /DNDEBUG main.cpp "/Fe:$out\cuffc.exe" /link ws2_32.lib
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cl /std:c++17 /EHsc /O2 /DNDEBUG /DCUFF_ENABLE_GRAPHICS "/I$prefix\include" graphics\desktop_main.cpp "/Fe:$out\c2d-graphics.exe" /link "/LIBPATH:$prefix\lib" SDL2main.lib SDL2.lib SDL2_image.lib SDL2_mixer.lib SDL2_ttf.lib ws2_32.lib
+          cl /std:c++17 /EHsc /O2 /DNDEBUG /DCUFF_ENABLE_GRAPHICS /DSDL_MAIN_HANDLED "/I$prefix\include" graphics\desktop_main.cpp "/Fe:$out\c2d-graphics.exe" /link "/LIBPATH:$prefix\lib" SDL2.lib SDL2_image.lib SDL2_mixer.lib SDL2_ttf.lib ws2_32.lib
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Copy-Item graphics\windows_runtime\demo.cuff, assets\DejaVuSansMono.ttf, README.md $out
           Copy-Item "$prefix\bin\*.dll" $out
